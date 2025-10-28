@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <vector>
 #include <atomic>
+#include <zlib.h> // 包含了 zlib 库的函数，我们用它来压缩
 
 
 class Logger {
@@ -84,9 +85,7 @@ public:
         if (bag_file.is_open()) {
             bag_file.close();
         }
-        if (json_index_file.is_open()) {
-            json_index_file.close();
-        }
+
     }
 
 private:
@@ -124,13 +123,20 @@ private:
     std::vector<BinaryEntry> binary_front, binary_back;
     std::thread worker;
     std::condition_variable cv;
+    std::ofstream log_file, binary_file, bag_file;
 
-    std::ofstream log_file, binary_file, bag_file, json_index_file;
+    size_t max_file_size = 10 *1024 * 1024; 
+    size_t max_time_minutes =60; 
+    std::string current_log_file="log_";
+    std::string current_bag_file="messages_bag_";
+    std::ofstream current_log;
+    std::ofstream current_bag;
+    std::time_t last_rotation_time = std::time(nullptr);
 
     Logger() { 
         openLogFile();
         openBinaryFile();
-        openJsonIndexFile();
+     
     }
 
     Logger(const Logger&) = delete;
@@ -174,13 +180,7 @@ private:
         }
     }
 
-    // 打开消息索引文件
-    void openJsonIndexFile() {
-        json_index_file.open("messages_index.json", std::ios::out);
-        if (!json_index_file.is_open()) {
-            std::cerr << "Failed to open JSON index file!" << std::endl;
-        }
-    }
+    
 
     // 同步写日志
     void logSync(LogLevel level, const std::string& message,
@@ -195,6 +195,7 @@ private:
         if (log_file.is_open()) {
             log_file << oss.str() << std::endl;
         }
+        rotateLogFileIfNeeded(); 
     }
 
     // 异步记录日志
@@ -208,6 +209,7 @@ private:
         }
 
         cv.notify_one();
+        
     }
 
     // 同步写二进制日志
@@ -337,6 +339,50 @@ private:
         if (log_file.is_open()) {
             log_file << log_msg << std::endl;
         }
+    }
+    bool compressLogFile(const std::string& src, const std::string& dest) {
+        //实现日志压缩功能
+        gzfile* out = gzopen(dest.c_str(), "wb");
+        std::ifstream in(src,std::ios_base::binary);
+        char buf[4096];
+        while(in.read(buf,sizeof(buf))){
+            gzwrite(out,buf,in.gcount());
+        }
+        gzwrite(out,buf,in.gcount());
+        gzclose(out);
+        in.close(); 
+        return true;
+    }
+    void createNewLogFile()
+    {
+        std::ostring file_name;
+        auto now = std::chrono::system_clock::now();
+        auto t = std::chrono::system_clock::to_time_t(now);
+        std::tm tm = *std::localtime(&t);
+        file_name << "log_" << std::put_time(&tm, "%Y%m%d_%H%M%S") <<".txt";
+        current_log.open(file_name.str(),std::ios_base::app);
+        if(!current_log.is_open()){
+            std::cerr<<"Failed to create new log file!"<<std::endl;
+        }
+    }    
+    void rotateLogFileIfNeeded() {
+        //检查文件大小
+        if(current_log.tellp() >=max_file_size){
+            current_log.close();
+            compressLogFile("log.txt","log.txt.gz");
+            createNewLogFile();
+        }
+        //检查时间间隔
+        std::time_t current_time =std::time(nullptr);
+        double time_diff = std::difftime(current_time,last_rotation_time);
+        if(time_diff >= max_time_minutes *60){
+            current_log.close();
+            compressLogFile("log.txt","log.txt.gz");
+            createNewLogFile();
+            last_rotation_time = current_time;
+        }
+       
+        
     }
 };
 
