@@ -342,7 +342,8 @@ private:
     }
     bool compressLogFile(const std::string& src, const std::string& dest) {
         //实现日志压缩功能
-        gzfile* out = gzopen(dest.c_str(), "wb");
+        gzFile out = gzopen(dest.c_str(), "wb");
+
         std::ifstream in(src,std::ios_base::binary);
         char buf[4096];
         while(in.read(buf,sizeof(buf))){
@@ -355,7 +356,7 @@ private:
     }
     void createNewLogFile()
     {
-        std::ostring file_name;
+        std::ostringstream file_name;
         auto now = std::chrono::system_clock::now();
         auto t = std::chrono::system_clock::to_time_t(now);
         std::tm tm = *std::localtime(&t);
@@ -367,7 +368,7 @@ private:
     }    
     void rotateLogFileIfNeeded() {
         //检查文件大小
-        if(current_log.tellp() >=max_file_size){
+        if(static_cast<size_t>(current_log.tellp()) >=max_file_size){
             current_log.close();
             compressLogFile("log.txt","log.txt.gz");
             createNewLogFile();

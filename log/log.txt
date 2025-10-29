@@ -1,8 +1,0 @@
-2025-10-28 21:27:11 INFO 阶段整合.cpp:359 main - This is sync mode log.
-2025-10-28 21:27:11 ERROR 阶段整合.cpp:360 main - Sync mode error log.
-2025-10-28 21:27:11 INFO 阶段整合.cpp:365 main - Async log 0
-2025-10-28 21:27:11 INFO 阶段整合.cpp:365 main - Async log 1
-2025-10-28 21:27:11 INFO 阶段整合.cpp:365 main - Async log 2
-2025-10-28 21:27:12 INFO 阶段整合.cpp:365 main - Async log 3
-2025-10-28 21:27:12 INFO 阶段整合.cpp:365 main - Async log 4
-2025-10-28 21:27:12 CRITICAL 阶段整合.cpp:368 main - Final async log.
