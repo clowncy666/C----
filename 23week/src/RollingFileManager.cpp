@@ -2,6 +2,7 @@
 #include <zlib.h>
 #include <sstream>
 #include <iostream>
+#include "DiskSpaceGuard.h"
 
 RollingFileManager::RollingFileManager(std::filesystem::path baseDir,
                                        std::string pattern,
@@ -50,6 +51,35 @@ std::filesystem::path RollingFileManager::currentPath() const {
     return current_path_;
 }
 
+
+
+bool RollingFileManager::ensureWritable(size_t /*bytes_hint*/) {
+    // 如果需要写入数据大小（bytes_hint），可以基于这个值做决策
+    // 但现在我们只是确保磁盘空间足够
+    if (guard_.hardPressure()) {
+        if (!suspend_writes_) {
+            std::cerr << "[Log] Disk hard pressure; suspend file writes. "
+                         "Console logging only.\n";
+        }
+        suspend_writes_ = true;
+        return false; // 不写入
+    }
+
+    // 确保空间足够（保证磁盘可写，清理空间直到满足 soft_min_free_bytes）
+    if (!guard_.ensureSoft()) {
+        std::cerr << "[Log] Disk space low; unable to ensure writable space.\n";
+        return false;
+    }
+
+    if (suspend_writes_) {
+        std::cerr << "[Log] Disk pressure relieved; resume file writes.\n";
+    }
+    suspend_writes_ = false;
+    return true; // 确保可以写入
+}
+
+
+
 bool RollingFileManager::needRotate() {
     if (!ofs_.is_open()) {
         return true;
@@ -63,7 +93,7 @@ bool RollingFileManager::needRotate() {
         return true;
     }
 
-    // ✅ 时间判断：基于文件的 mtime（跨进程有效）
+    //时间判断：基于文件的 mtime（跨进程有效）
     std::error_code ec;
     auto mtime = std::filesystem::last_write_time(current_path_, ec);
     if (!ec) {
@@ -129,7 +159,7 @@ std::string RollingFileManager::makeFilename(int seq) const {
     auto p = pattern_;
     auto pos = p.find("%Y%m%d_%H%M%S");
     if (pos != std::string::npos) {
-        p.replace(pos, 15, ts);
+        p.replace(pos, 13, ts);
     }
     pos = p.find("%03d");
     if (pos != std::string::npos) {
@@ -144,7 +174,9 @@ void RollingFileManager::rollToNewFile() {
     for (int i = 0; i < 1000; ++i) {
         auto candidate = base_dir_ / makeFilename(i);
         std::error_code ec;
-        if (!std::filesystem::exists(candidate, ec)) {
+        bool exists_txt = std::filesystem::exists(candidate, ec);
+        bool exists_gz  = std::filesystem::exists(candidate.string() + ".gz");
+        if (!exists_txt && !exists_gz) {
             current_path_ = candidate;
             ofs_.open(current_path_, std::ios::out | std::ios::app);
             // open_time_ 若存在，这里可以设置为 now；但 needRotate 已基于 mtime，无强依赖

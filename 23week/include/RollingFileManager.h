@@ -6,7 +6,7 @@
 #include <vector>
 #include <algorithm>
 #include <iomanip>
-
+#include "DiskSpaceGuard.h"
 class RollingFileManager {
 public:
  
@@ -30,7 +30,8 @@ public:
     void rotate();
 
     void enforceReserveN();
-
+    
+    bool ensureWritable(size_t bytes_hint = 0);
 private:
     //fix
     std::filesystem::path findLatestAppendableFile() const;
@@ -53,4 +54,12 @@ private:
     static void gzipFile(const std::filesystem::path& src);
     
 
+    DiskSpaceGuard guard_{ base_dir_, /*prefix*/"log_", /*ext*/".txt",
+                       DiskPolicy{512ULL*1024*1024, 128ULL*1024*1024, 3} };
+    bool suspend_writes_ = false;
+    std::chrono::steady_clock::time_point last_space_check_{};
+    std::chrono::seconds space_check_interval_{2};
+
+    
+        
 };

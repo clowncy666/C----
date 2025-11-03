@@ -17,7 +17,7 @@
 #include <cstdint>   // FIX: 补充 uint32_t/uint64_t/uint8_t
 #include <ctime>     // FIX: 补充 std::time
 #include <zlib.h>    // 若仅在 RollingFileManager 内使用，可移到其实现文件
-
+#include "DiskSpaceGuard.h"
 class Logger {
 public:
     enum class LogLevel { DEBUG, INFO, WARNING, ERROR, CRITICAL };
@@ -200,12 +200,17 @@ private:
         std::lock_guard<std::mutex> lock(sync_mtx);
         std::cout << oss.str() << std::endl;
         if (text_mgr.needRotate()) text_mgr.rotate();
+
+        if (!text_mgr.ensureWritable(lineStr.size() + 128)) {
+            return; // 文件写入暂停，保留控制台输出
+        }
+
         auto& os = text_mgr.stream();
         if (os.good()) {
         os << lineStr << std::endl;
         // 可按需批量 flush，这里先和原行为保持一致
         os.flush();
-    }
+        }
         
     }
 
@@ -373,6 +378,9 @@ private:
         // —— 改动点：异步落盘也统一走 text_mgr ——
         std::lock_guard<std::mutex> lock(sync_mtx); // 复用同一把锁，避免与同步路径竞争
         if (text_mgr.needRotate()) text_mgr.rotate();
+        if (!text_mgr.ensureWritable(log_msg.size() + 128)) {
+            return; // 文件写入暂停，保留控制台输出
+        }
         auto& os = text_mgr.stream();
         if (os.good()) {
             os << log_msg << std::endl;
