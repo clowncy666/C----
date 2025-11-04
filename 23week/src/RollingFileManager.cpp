@@ -4,13 +4,50 @@
 #include <iostream>
 #include "DiskSpaceGuard.h"
 
+std::string getProcessName() {
+    char buf[PATH_MAX]{};
+    ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf)-1);
+    if (n > 0) {
+        std::string path(buf, n);
+        auto pos = path.find_last_of('/');
+        return (pos == std::string::npos) ? path : path.substr(pos + 1);
+    }
+}
+
+int getPid() {
+
+    return (int)::getpid();  // Linux/Unix
+}
+
+std::filesystem::path getProcessLogDir(const std::string& base_dir) {
+    std::string pname = getProcessName();  // 获取进程名
+    int pid = getPid();                    // 获取进程 PID
+    std::filesystem::path path = base_dir/pname/std::to_string(pid);  // 拼接路径
+    std::filesystem::create_directories(path);  // 创建目录
+    return path;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 RollingFileManager::RollingFileManager(std::filesystem::path baseDir,
                                        std::string pattern,
                                        size_t maxBytes,
                                        std::chrono::minutes maxAge,
                                        size_t reserveN,
                                        bool compressOld)
-    : base_dir_(std::move(baseDir)),
+    : base_dir_(std::move(getProcessLogDir(baseDir))),
       pattern_(std::move(pattern)),
       max_bytes_(maxBytes),
       max_age_(maxAge),
