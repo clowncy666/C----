@@ -19,17 +19,17 @@ inline std::string getProcessName() {
     }
     return "unknown";
 }
-
+/*
 // 获取进程 PID
 inline int getPid() {
     return (int)::getpid();
 }
-
+*/
 // 构建进程专属目录：<base_dir>/<proc_name>/<pid>/
 inline std::filesystem::path getProcessLogDir(const std::filesystem::path& base_dir) {
     std::string pname = getProcessName();
-    int pid = getPid();
-    std::filesystem::path path = base_dir / pname / std::to_string(pid);
+    //int pid = getPid();
+    std::filesystem::path path = base_dir / pname; // std::to_string(pid);
     std::filesystem::create_directories(path);
     return path;
 }
