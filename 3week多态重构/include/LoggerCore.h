@@ -10,7 +10,10 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+class LoggerCore;
+
 enum class LogLevel { DEBUG, INFO, WARNING, ERROR, CRITICAL };
+
 class ILogEntry {
 public:
     virtual ~ILogEntry() = default;
@@ -24,6 +27,12 @@ public:
     std::string function;
     std::string timestamp;
     int line;
+
+
+    LogEntry(LogLevel level, const std::string& message, const std::string& file, 
+         const std::string& function, const std::string& timestamp, int line)
+    : level(level), message(message), file(file), function(function), timestamp(timestamp), line(line) {}
+
     
     void process(LoggerCore* core) override;
 };
@@ -32,7 +41,10 @@ public:
     std::vector<uint8_t> data;
     std::string tag;
     uint64_t timestamp;
+    // 默认构造函数
     
+    BinaryEntry(const std::vector<uint8_t>& data,const std::string& tag, uint64_t timestamp):
+    data(data), tag(tag), timestamp(timestamp) {}
     void process(LoggerCore* core) override;
 };
 
@@ -42,7 +54,10 @@ public:
     std::string type;
     std::vector<uint8_t> data;
     uint64_t timestamp;
-    
+    MessageEntry(const std::string& topic, const std::string& type,
+             const std::vector<uint8_t>& data, uint64_t timestamp)
+    : topic(topic), type(type), data(data), timestamp(timestamp) {}
+
     void process(LoggerCore* core) override;
 };
 
@@ -51,7 +66,15 @@ public:
 
 class LoggerCore {
 public:
-    
+    // 异步写入
+
+    void recordMessageSync(const MessageEntry& entry);
+    void logSync(const LogEntry& entry);    
+    void logBinarySync(const BinaryEntry& entry);
+
+
+
+
     static LoggerCore& instance();
     
     // 初始化各模块 Sink
@@ -81,10 +104,7 @@ private:
     LoggerCore(const LoggerCore&) = delete;
     LoggerCore& operator=(const LoggerCore&) = delete;
     
-    // 同步写入
-    void logSync(const LogEntry& entry);
-    void logBinarySync(const BinaryEntry& entry);
-    void recordMessageSync(const MessageEntry& entry);
+
     
     // 异步写入
     void logAsync(const LogEntry& entry);
@@ -94,8 +114,7 @@ private:
     // 异步工作线程
     void startAsyncWorker();
     void processLogs();
-    void LoggerCore::processBatch();
-    void LoggerCore::flushRemainingLogs();
+
     // 格式化文本日志
     std::string formatLogEntry(const LogEntry& entry);
     std::string getCurrentTime();
@@ -112,7 +131,11 @@ private:
     // 使用统一的队列存储所有类型的条目
     std::vector<std::unique_ptr<ILogEntry>> entry_front_;
     std::vector<std::unique_ptr<ILogEntry>> entry_back_;
-    
+    std::vector<std::unique_ptr<LogEntry>> text_front_;
+    std::vector<std::unique_ptr<BinaryEntry>> binary_front_;
+    std::vector<std::unique_ptr<MessageEntry>> message_front_;
+
+
     std::mutex buffer_mtx_;
     std::mutex sync_mtx_;
     std::thread worker_;
@@ -123,8 +146,8 @@ private:
 };
 
 // 便捷宏
-#define LOG_DEBUG(msg) LoggerCore::instance().log(LoggerCore::LogLevel::DEBUG, msg, __FILE__, __FUNCTION__, __LINE__)
-#define LOG_INFO(msg) LoggerCore::instance().log(LoggerCore::LogLevel::INFO, msg, __FILE__, __FUNCTION__, __LINE__)
-#define LOG_WARNING(msg) LoggerCore::instance().log(LoggerCore::LogLevel::WARNING, msg, __FILE__, __FUNCTION__, __LINE__)
-#define LOG_ERROR(msg) LoggerCore::instance().log(LoggerCore::LogLevel::ERROR, msg, __FILE__, __FUNCTION__, __LINE__)
-#define LOG_CRITICAL(msg) LoggerCore::instance().log(LoggerCore::LogLevel::CRITICAL, msg, __FILE__, __FUNCTION__, __LINE__)
+#define LOG_DEBUG(msg) LoggerCore::instance().log(LogLevel::DEBUG, msg, __FILE__, __FUNCTION__, __LINE__)
+#define LOG_INFO(msg) LoggerCore::instance().log(LogLevel::INFO, msg, __FILE__, __FUNCTION__, __LINE__)
+#define LOG_WARNING(msg) LoggerCore::instance().log(LogLevel::WARNING, msg, __FILE__, __FUNCTION__, __LINE__)
+#define LOG_ERROR(msg) LoggerCore::instance().log(LogLevel::ERROR, msg, __FILE__, __FUNCTION__, __LINE__)
+#define LOG_CRITICAL(msg) LoggerCore::instance().log(LogLevel::CRITICAL, msg, __FILE__, __FUNCTION__, __LINE__)

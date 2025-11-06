@@ -1,0 +1,2 @@
+2025-11-06 20:17:58 INFO test/test_multi_module.cpp:18 main - Sync text log - module=text
+2025-11-06 20:17:58 WARNING test/test_multi_module.cpp:19 main - Another sync text log

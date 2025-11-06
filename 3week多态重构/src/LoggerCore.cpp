@@ -93,11 +93,11 @@ void LoggerCore::log(LogLevel level, const std::string& message,
 }
 
 void LoggerCore::logBinary(const void* data, size_t size, const std::string& tag) {
-    BinaryEntry entry;
-    entry.data.assign((uint8_t*)data, (uint8_t*)data + size);
-    entry.tag = tag;
-    entry.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+    std::vector<uint8_t> data_vec((uint8_t*)data, (uint8_t*)data + size);
+    uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+    
+    BinaryEntry entry{data_vec, tag, timestamp};
     
     if (async_mode_) {
         logBinaryAsync(entry);
@@ -149,7 +149,7 @@ void LoggerCore::recordMessageSync(const MessageEntry& entry) {
 void LoggerCore::logAsync(const LogEntry& entry) {
     {
         std::lock_guard<std::mutex> lock(buffer_mtx_);
-        text_front_.push_back(entry);
+        text_front_.push_back(std::make_unique<LogEntry>(entry));
     }
     cv_.notify_one();
 }
@@ -157,7 +157,7 @@ void LoggerCore::logAsync(const LogEntry& entry) {
 void LoggerCore::logBinaryAsync(const BinaryEntry& entry) {
     {
         std::lock_guard<std::mutex> lock(buffer_mtx_);
-        binary_front_.push_back(entry);
+        binary_front_.push_back(std::make_unique<BinaryEntry>(entry));
     }
     cv_.notify_one();
 }
@@ -165,7 +165,7 @@ void LoggerCore::logBinaryAsync(const BinaryEntry& entry) {
 void LoggerCore::recordMessageAsync(const MessageEntry& entry) {
     {
         std::lock_guard<std::mutex> lock(buffer_mtx_);
-        message_front_.push_back(entry);
+        message_front_.push_back(std::make_unique<MessageEntry>(entry));
     }
     cv_.notify_one();
 }

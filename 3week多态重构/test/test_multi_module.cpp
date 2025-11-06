@@ -9,7 +9,7 @@ int main() {
     
     // 初始化 Sinks
     logger.initSinks("./logs");
-    logger.setLogLevel(LoggerCore::LogLevel::DEBUG);
+    logger.setLogLevel(LogLevel::DEBUG);
     
     std::cout << "====== 测试1：同步模式 - 多模块写入 ======\n";
     logger.setAsyncMode(false);
