@@ -104,9 +104,9 @@ int main() {
     
     std::cout << "\n====== 验收结果 ======\n";
     std::cout << "请检查目录结构：\n";
-    std::cout << "  ./logs/<proc_name>/<pid>/text/    - 文本日志\n";
-    std::cout << "  ./logs/<proc_name>/<pid>/binary/  - 二进制日志\n";
-    std::cout << "  ./logs/<proc_name>/<pid>/bag/     - 消息包\n";
+    std::cout << "  ./logs/<proc_name>/text/    - 文本日志\n";
+    std::cout << "  ./logs/<proc_name>/binary/  - 二进制日志\n";
+    std::cout << "  ./logs/<proc_name>/bag/     - 消息包\n";
     
     return 0;
 }

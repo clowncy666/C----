@@ -1,6 +1,0 @@
-2025-11-06 20:37:07 INFO test/test_multi_module.cpp:18 main - Sync text log - module=text
-2025-11-06 20:37:07 WARNING test/test_multi_module.cpp:19 main - Another sync text log
-2025-11-06 20:37:36 INFO test/test_multi_module.cpp:18 main - Sync text log - module=text
-2025-11-06 20:37:36 WARNING test/test_multi_module.cpp:19 main - Another sync text log
-2025-11-06 20:37:53 INFO test/test_multi_module.cpp:18 main - Sync text log - module=text
-2025-11-06 20:37:53 WARNING test/test_multi_module.cpp:19 main - Another sync text log
