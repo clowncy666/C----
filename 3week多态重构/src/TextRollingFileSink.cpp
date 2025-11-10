@@ -17,24 +17,37 @@ TextRollingFileSink::TextRollingFileSink(
         module_dir, pattern, max_bytes, max_age, reserve_n, compress_old
     );
 }
+TextRollingFileSink::~TextRollingFileSink() {
+    try {
+        flush();
+    } catch (...) {
+        // 析构函数不应该抛出异常
+    }
+}
 
 void TextRollingFileSink::writeText(const std::string& formatted_message) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     
     if (needRotate()) {
         rotate();
     }
-    
-    if (!ensureWritable(formatted_message.size() + 128)) {
+    size_t estimated_size = formatted_message.size() + 1;
+    if (!ensureWritable(estimated_size)) {
+        // 磁盘空间不足，记录错误但不抛异常
+        std::cerr << "[TextSink] Disk space insufficient, dropping log entry\n";
         return; // 磁盘空间不足，跳过写入
     }
     
     auto& os = rolling_mgr_->stream();
     if (os.good()) {
         os << formatted_message << std::endl;
+        // 更新统计
+        ++total_writes_;
+        total_bytes_ += estimated_size;
+    } else {
+        std::cerr << "[TextSink] Stream not good, skipping write\n";
     }
 }
-
 bool TextRollingFileSink::needRotate() {
     return rolling_mgr_->needRotate();
 }

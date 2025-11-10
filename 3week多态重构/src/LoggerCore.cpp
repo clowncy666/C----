@@ -6,29 +6,91 @@
 #include <sstream>
 #include <iomanip>
 
-
-void LogEntry::process(LoggerCore* core) {
-    core->logSync(*this);
+// ILogEntry 实现（多态的核心）
+void TextLogEntry::writeTo(const std::map<std::string, std::shared_ptr<ILogSink>>& sinks) {
+    auto it = sinks.find("text");
+    if (it != sinks.end()) {
+        // 格式化在这里完成，减少耦合
+        std::ostringstream oss;
+        oss << timestamp << " ";
+        
+        switch (level) {
+            case LogLevel::DEBUG: oss << "DEBUG"; break;
+            case LogLevel::INFO: oss << "INFO"; break;
+            case LogLevel::WARNING: oss << "WARNING"; break;
+            case LogLevel::ERROR: oss << "ERROR"; break;
+            case LogLevel::CRITICAL: oss << "CRITICAL"; break;
+        }
+        
+        oss << " " << file << ":" << line << " "
+            << function << " - " << message;
+        
+        std::string formatted = oss.str();
+        
+        // 控制台输出
+        std::cout << formatted << std::endl;
+        
+        // 写入 Sink
+        it->second->writeText(formatted);
+    }
 }
 
-void BinaryEntry::process(LoggerCore* core) {
-    core->logBinarySync(*this);
+void BinaryLogEntry::writeTo(const std::map<std::string, std::shared_ptr<ILogSink>>& sinks) {
+    auto it = sinks.find("binary");
+    if (it != sinks.end()) {
+        it->second->writeBinary(data, tag, timestamp);
+    }
 }
 
-void MessageEntry::process(LoggerCore* core) {
-    core->recordMessageSync(*this);
+void MessageLogEntry::writeTo(const std::map<std::string, std::shared_ptr<ILogSink>>& sinks) {
+    auto it = sinks.find("bag");
+    if (it != sinks.end()) {
+        it->second->writeMessage(topic, type, data, timestamp);
+    }
 }
 
+class DefaultSinkFactory : public SinkFactory {
+public:
+    std::shared_ptr<ILogSink> createTextSink(
+        const std::filesystem::path& base_dir, const SinkConfig& config) override {
+        return std::make_shared<TextRollingFileSink>(
+            base_dir, config.module_name, config.pattern,
+            config.max_bytes, config.max_age, config.reserve_n, config.compress_old
+        );
+    }
+    
+    std::shared_ptr<ILogSink> createBinarySink(
+        const std::filesystem::path& base_dir, const SinkConfig& config) override {
+        return std::make_shared<BinaryRollingFileSink>(
+            base_dir, config.module_name, config.pattern,
+            config.max_bytes, config.max_age, config.reserve_n, config.compress_old
+        );
+    }
+    
+    std::shared_ptr<ILogSink> createBagSink(
+        const std::filesystem::path& base_dir, const SinkConfig& config) override {
+        return std::make_shared<BagSink>(
+            base_dir, config.module_name, config.pattern,
+            config.max_bytes, config.max_age, config.reserve_n, config.compress_old
+        );
+    }
+};
 
-
-
-LoggerCore::LoggerCore() {}
+LoggerCore::LoggerCore() {front_buffer_.reserve(1024);
+    back_buffer_.reserve(1024);}
 
 LoggerCore::~LoggerCore() {
     stop_ = true;
     cv_.notify_all();
     if (worker_.joinable()) {
         worker_.join();
+    }
+    // 处理残留数据
+    std::lock_guard<std::mutex> lock(buffer_mtx_);
+    for (auto& entry : front_buffer_) {
+        if (entry) {
+            entry->writeTo(sinks_);
+        }
     }
 }
 
@@ -37,43 +99,49 @@ LoggerCore& LoggerCore::instance() {
     return inst;
 }
 
-void LoggerCore::initSinks(const std::filesystem::path& base_dir) {
-    // 文本日志模块
-    sinks_["text"] = std::make_shared<TextRollingFileSink>(
-        base_dir, "text",
-        "log_%Y%m%d_%H%M%S_%03d.txt",
-        1 * 1024 * 1024,  // 1MB
-        std::chrono::minutes(60),
-        8, true
-    );
+void LoggerCore::initSinks(const std::filesystem::path& base_dir,std::unique_ptr<SinkFactory> factory) {
+    if (!factory) {
+        factory = std::make_unique<DefaultSinkFactory>();
+    }
     
-    // 二进制日志模块
-    sinks_["binary"] = std::make_shared<BinaryRollingFileSink>(
-        base_dir, "binary",
-        "binary_%Y%m%d_%H%M%S_%03d.bin",
-        5 * 1024 * 1024,  // 5MB
-        std::chrono::minutes(120),
-        5, true
-    );
+    // 配置可以从外部传入（进一步降低耦合）
+    SinkConfig text_config{
+        "text", "log_%Y%m%d_%H%M%S_%03d.txt",
+        1 * 1024 * 1024, std::chrono::minutes(60), 8, true
+    };
     
-    // 消息包模块
-    sinks_["bag"] = std::make_shared<BagSink>(
-        base_dir, "bag",
-        "messages_%Y%m%d_%H%M%S_%03d.bag",
-        10 * 1024 * 1024,  // 10MB
-        std::chrono::minutes(180),
-        3, true
-    );
+    SinkConfig binary_config{
+        "binary", "binary_%Y%m%d_%H%M%S_%03d.bin",
+        5 * 1024 * 1024, std::chrono::minutes(120), 5, true
+    };
+    
+    SinkConfig bag_config{
+        "bag", "messages_%Y%m%d_%H%M%S_%03d.bag",
+        10 * 1024 * 1024, std::chrono::minutes(180), 3, true
+    };
+    
+    sinks_["text"] = factory->createTextSink(base_dir, text_config);
+    sinks_["binary"] = factory->createBinarySink(base_dir, binary_config);
+    sinks_["bag"] = factory->createBagSink(base_dir, bag_config);
 }
+
 
 void LoggerCore::setLogLevel(LogLevel level) {
     current_level_ = level;
 }
 
 void LoggerCore::setAsyncMode(bool enable) {
-    async_mode_ = enable;
-    if (async_mode_ && !worker_started_) {
-        startAsyncWorker();
+    if (enable && !async_mode_) {
+        async_mode_ = true;
+        worker_ = std::thread(&LoggerCore::processAsyncQueue, this);
+    } else if (!enable && async_mode_) {
+        stop_ = true;
+        cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+        stop_ = false;
+        async_mode_ = false;
     }
 }
 
@@ -86,9 +154,9 @@ void LoggerCore::log(LogLevel level, const std::string& message,
     LogEntry entry{level, message, file, function, getCurrentTime(), line};
     
     if (async_mode_) {
-        logAsync(entry);
+        enqueueAsync(std::move(entry));
     } else {
-        logSync(entry);
+        processEntry(std::move(entry));
     }
 }
 
@@ -97,12 +165,14 @@ void LoggerCore::logBinary(const void* data, size_t size, const std::string& tag
     uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     
-    BinaryEntry entry{data_vec, tag, timestamp};
+    auto entry = std::make_unique<BinaryLogEntry>(
+        std::move(data_vec), tag, timestamp
+    );
     
     if (async_mode_) {
-        logBinaryAsync(entry);
+        enqueueAsync(std::move(entry));
     } else {
-        logBinarySync(entry);
+        processEntry(std::move(entry));
     }
 }
 
@@ -112,103 +182,68 @@ void LoggerCore::recordMessage(const std::string& topic, const std::string& type
         static_cast<uint64_t>(std::chrono::system_clock::to_time_t(
             std::chrono::system_clock::now()))};
     
+    auto entry = std::make_unique<MessageLogEntry>(
+        topic, type, data, timestamp
+    );
+    
     if (async_mode_) {
-        recordMessageAsync(entry);
+        enqueueAsync(std::move(entry));
     } else {
-        recordMessageSync(entry);
+        processEntry(std::move(entry));
     }
 }
 
-void LoggerCore::logSync(const LogEntry& entry) {
-    std::string formatted = formatLogEntry(entry);
+void LoggerCore::processEntry(std::unique_ptr<ILogEntry> entry) {
+    if (!entry) return;
     
-    std::lock_guard<std::mutex> lock(sync_mtx_);
-    std::cout << formatted << std::endl;
-    
-    if (sinks_.count("text")) {
-        sinks_["text"]->writeText(formatted);
-    }
+    // 同步模式直接写入，使用独立的锁
+    std::lock_guard<std::mutex> lock(sync_write_mtx_);
+    entry->writeTo(sinks_);
 }
 
-void LoggerCore::logBinarySync(const BinaryEntry& entry) {
-    std::lock_guard<std::mutex> lock(sync_mtx_);
+void LoggerCore::enqueueAsync(std::unique_ptr<ILogEntry> entry) {
+    if (!entry) return;
     
-    if (sinks_.count("binary")) {
-        sinks_["binary"]->writeBinary(entry.data, entry.tag, entry.timestamp);
-    }
-}
-
-void LoggerCore::recordMessageSync(const MessageEntry& entry) {
-    std::lock_guard<std::mutex> lock(sync_mtx_);
-    
-    if (sinks_.count("bag")) {
-        sinks_["bag"]->writeMessage(entry.topic, entry.type, entry.data, entry.timestamp);
-    }
-}
-
-void LoggerCore::logAsync(const LogEntry& entry) {
     {
         std::lock_guard<std::mutex> lock(buffer_mtx_);
-        text_front_.push_back(std::make_unique<LogEntry>(entry));
+        front_buffer_.push_back(std::move(entry));
     }
     cv_.notify_one();
 }
 
-void LoggerCore::logBinaryAsync(const BinaryEntry& entry) {
-    {
-        std::lock_guard<std::mutex> lock(buffer_mtx_);
-        binary_front_.push_back(std::make_unique<BinaryEntry>(entry));
-    }
-    cv_.notify_one();
-}
-
-void LoggerCore::recordMessageAsync(const MessageEntry& entry) {
-    {
-        std::lock_guard<std::mutex> lock(buffer_mtx_);
-        message_front_.push_back(std::make_unique<MessageEntry>(entry));
-    }
-    cv_.notify_one();
-}
-
-void LoggerCore::startAsyncWorker() {
-    worker_started_ = true;
-    worker_ = std::thread(&LoggerCore::processLogs, this);
-}
-
-void LoggerCore::processLogs() {
+void LoggerCore::processAsyncQueue() {
     while (!stop_) {
+        // 等待数据或停止信号
         {
             std::unique_lock<std::mutex> lock(buffer_mtx_);
             cv_.wait_for(lock, std::chrono::milliseconds(100), [this] {
-                return !text_front_.empty() || !binary_front_.empty() || 
-                       !message_front_.empty() || stop_;
+                return !front_buffer_.empty() || stop_;
             });
             
-            entry_front_.swap(entry_back_);
+            // 交换缓冲区（关键：正确的双缓冲实现）
+            front_buffer_.swap(back_buffer_);
         }
         
-    
-        if (!entry_back_.empty()) {
-            for (auto& entry : entry_back_) {
-                entry->process(this);  // 多态
+        // 在锁外处理数据（提高并发性能）
+        for (auto& entry : back_buffer_) {
+            if (entry) {
+                entry->writeTo(sinks_);
             }
-            entry_back_.clear();
+        }
+        back_buffer_.clear();
+    }
+    
+    // 处理残留数据
+    std::lock_guard<std::mutex> lock(buffer_mtx_);
+    for (auto& entry : front_buffer_) {
+        if (entry) {
+            entry->writeTo(sinks_);
         }
     }
-    
-    // 刷新残留数据
-    for (auto& entry : entry_front_) {
-        entry->process(this);
-    }
+    front_buffer_.clear();
 }
 
-std::string LoggerCore::formatLogEntry(const LogEntry& entry) {
-    std::ostringstream oss;
-    oss << entry.timestamp << " " << logLevelToString(entry.level)
-        << " " << entry.file << ":" << entry.line << " "
-        << entry.function << " - " << entry.message;
-    return oss.str();
-}
+
 
 std::string LoggerCore::getCurrentTime() {
     auto now = std::chrono::system_clock::now();
