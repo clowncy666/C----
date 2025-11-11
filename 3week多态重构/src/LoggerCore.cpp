@@ -6,7 +6,9 @@
 #include <sstream>
 #include <iomanip>
 
+// ============================================
 // ILogEntry 实现（多态的核心）
+// ============================================
 void TextLogEntry::writeTo(const std::map<std::string, std::shared_ptr<ILogSink>>& sinks) {
     auto it = sinks.find("text");
     if (it != sinks.end()) {
@@ -49,6 +51,9 @@ void MessageLogEntry::writeTo(const std::map<std::string, std::shared_ptr<ILogSi
     }
 }
 
+// ============================================
+// 默认 Sink 工厂实现
+// ============================================
 class DefaultSinkFactory : public SinkFactory {
 public:
     std::shared_ptr<ILogSink> createTextSink(
@@ -76,15 +81,22 @@ public:
     }
 };
 
-LoggerCore::LoggerCore() {front_buffer_.reserve(1024);
-    back_buffer_.reserve(1024);}
+// ============================================
+// LoggerCore 实现
+// ============================================
+LoggerCore::LoggerCore() {
+    front_buffer_.reserve(1024);
+    back_buffer_.reserve(1024);
+}
 
 LoggerCore::~LoggerCore() {
     stop_ = true;
     cv_.notify_all();
+    
     if (worker_.joinable()) {
         worker_.join();
     }
+    
     // 处理残留数据
     std::lock_guard<std::mutex> lock(buffer_mtx_);
     for (auto& entry : front_buffer_) {
@@ -99,7 +111,8 @@ LoggerCore& LoggerCore::instance() {
     return inst;
 }
 
-void LoggerCore::initSinks(const std::filesystem::path& base_dir,std::unique_ptr<SinkFactory> factory) {
+void LoggerCore::initSinks(const std::filesystem::path& base_dir, 
+                           std::unique_ptr<SinkFactory> factory) {
     if (!factory) {
         factory = std::make_unique<DefaultSinkFactory>();
     }
@@ -125,7 +138,6 @@ void LoggerCore::initSinks(const std::filesystem::path& base_dir,std::unique_ptr
     sinks_["bag"] = factory->createBagSink(base_dir, bag_config);
 }
 
-
 void LoggerCore::setLogLevel(LogLevel level) {
     current_level_ = level;
 }
@@ -146,12 +158,15 @@ void LoggerCore::setAsyncMode(bool enable) {
 }
 
 void LoggerCore::log(LogLevel level, const std::string& message,
-                    const std::string& file, const std::string& function, int line) {
+                     const std::string& file, const std::string& function, int line) {
     if (static_cast<int>(level) < static_cast<int>(current_level_)) {
         return;
     }
     
-    std::make_unique<TextLogEntry> entry{level, message, file, function, getCurrentTime(), line};
+    // ✅ 修复：正确的语法
+    auto entry = std::make_unique<TextLogEntry>(
+        level, message, file, function, getCurrentTime(), line
+    );
     
     if (async_mode_) {
         enqueueAsync(std::move(entry));
@@ -161,7 +176,9 @@ void LoggerCore::log(LogLevel level, const std::string& message,
 }
 
 void LoggerCore::logBinary(const void* data, size_t size, const std::string& tag) {
-    std::vector<uint8_t> data_vec((uint8_t*)data, (uint8_t*)data + size);
+    std::vector<uint8_t> data_vec(static_cast<const uint8_t*>(data), 
+                                  static_cast<const uint8_t*>(data) + size);
+    
     uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     
@@ -177,14 +194,14 @@ void LoggerCore::logBinary(const void* data, size_t size, const std::string& tag
 }
 
 void LoggerCore::recordMessage(const std::string& topic, const std::string& type,
-                              const std::vector<uint8_t>& data){
-    // ✅ 修复：先定义 timestamp，然后创建 entry
+                               const std::vector<uint8_t>& data) {
     uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     
     auto entry = std::make_unique<MessageLogEntry>(
         topic, type, data, timestamp
     );
+    
     if (async_mode_) {
         enqueueAsync(std::move(entry));
     } else {
@@ -241,8 +258,6 @@ void LoggerCore::processAsyncQueue() {
     }
     front_buffer_.clear();
 }
-
-
 
 std::string LoggerCore::getCurrentTime() {
     auto now = std::chrono::system_clock::now();

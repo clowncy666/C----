@@ -5,23 +5,65 @@
 #include <iomanip>
 #include <algorithm>
 
-RollingFileManager::RollingFileManager(
-    std::filesystem::path baseDir,
-    std::string pattern,
-    size_t maxBytes,
-    std::chrono::minutes maxAge,
-    size_t reserveN,
-    bool compressOld)
-    : base_dir_(ProcessUtils::getProcessLogDir(baseDir)),  // 关键：自动加上 <proc>/<pid>
-      pattern_(std::move(pattern)),
-      max_bytes_(maxBytes),
-      max_age_(maxAge),
-      reserve_n_(reserveN),
-      compress_(compressOld),
-      guard_(std::make_unique<DiskSpaceGuard>(
-    base_dir_, "", expectedExtension(), 
-    DiskPolicy{100ULL * 1024 * 1024, 50ULL * 1024 * 1024, 2}))
+// ============================================
+// 默认压缩策略实现（使用 gzip）
+// ============================================
+class GzipCompressionStrategy : public ICompressionStrategy {
+public:
+    bool compress(const std::filesystem::path& src) override {
+        std::ifstream in(src, std::ios::binary);
+        if (!in) return false;
+        
+        auto gzPath = src.string() + ".gz";
+        gzFile out = gzopen(gzPath.c_str(), "wb");
+        if (!out) return false;
+        
+        char buffer[1 << 16];
+        while (in) {
+            in.read(buffer, sizeof(buffer));
+            auto n = in.gcount();
+            if (n > 0) {
+                gzwrite(out, buffer, static_cast<unsigned int>(n));
+            }
+        }
+        
+        gzclose(out);
+        in.close();
+        
+        std::error_code ec;
+        std::filesystem::remove(src, ec);
+        return !ec;
+    }
+    
+    std::string compressedExtension() const override {
+        return ".gz";
+    }
+};
+
+// ============================================
+// RollingFileManager 实现
+// ============================================
+RollingFileManager::RollingFileManager(Config config)
+    : base_dir_(ProcessUtils::getProcessLogDir(config.base_dir)),
+      pattern_(std::move(config.pattern)),
+      max_bytes_(config.max_bytes),
+      max_age_(config.max_age),
+      reserve_n_(config.reserve_n),
+      compress_(config.compress_old),
+      rotation_policy_(config.rotation_policy ? 
+                      config.rotation_policy : 
+                      std::make_shared<HybridRotationPolicy>()),
+      compression_strategy_(config.compression_strategy ?
+                           config.compression_strategy :
+                           std::make_shared<GzipCompressionStrategy>()),
+      file_created_time_(std::chrono::system_clock::now())
 {
+    // ✅ 在构造函数体内初始化 guard_
+    guard_ = std::make_unique<DiskSpaceGuard>(
+        base_dir_, "", expectedExtension(),
+        DiskPolicy{100ULL * 1024 * 1024, 50ULL * 1024 * 1024, 2}
+    );
+    
     std::error_code ec;
     std::filesystem::create_directories(base_dir_, ec);
     if (ec) {
@@ -29,7 +71,48 @@ RollingFileManager::RollingFileManager(
                   << base_dir_ << " - " << ec.message() << std::endl;
     }
     
-    // 尝试复用最新的可追加文件
+    auto resume = findLatestAppendableFile();
+    if (!resume.empty()) {
+        current_path_ = resume;
+        ofs_.open(current_path_, std::ios::out | std::ios::app);
+        if (!ofs_.is_open()) {
+            rollToNewFile();
+        }
+    } else {
+        rollToNewFile();
+    }
+}
+
+RollingFileManager::RollingFileManager(
+    std::filesystem::path baseDir,
+    std::string pattern,
+    size_t maxBytes,
+    std::chrono::minutes maxAge,
+    size_t reserveN,
+    bool compressOld)
+    : base_dir_(ProcessUtils::getProcessLogDir(baseDir)),
+      pattern_(std::move(pattern)),
+      max_bytes_(maxBytes),
+      max_age_(maxAge),
+      reserve_n_(reserveN),
+      compress_(compressOld),
+      rotation_policy_(std::make_shared<HybridRotationPolicy>()),
+      compression_strategy_(std::make_shared<GzipCompressionStrategy>()),
+      file_created_time_(std::chrono::system_clock::now())
+{
+    // ✅ 在构造函数体内初始化 guard_
+    guard_ = std::make_unique<DiskSpaceGuard>(
+        base_dir_, "", expectedExtension(),
+        DiskPolicy{100ULL * 1024 * 1024, 50ULL * 1024 * 1024, 2}
+    );
+    
+    std::error_code ec;
+    std::filesystem::create_directories(base_dir_, ec);
+    if (ec) {
+        std::cerr << "[RollingFileManager] Failed to create directory: " 
+                  << base_dir_ << " - " << ec.message() << std::endl;
+    }
+    
     auto resume = findLatestAppendableFile();
     if (!resume.empty()) {
         current_path_ = resume;
@@ -57,7 +140,7 @@ std::filesystem::path RollingFileManager::currentPath() const {
 }
 
 bool RollingFileManager::ensureWritable(size_t /*bytes_hint*/) {
-    if (guard_.hardPressure()) {
+    if (guard_->hardPressure()) {
         if (!suspend_writes_) {
             std::cerr << "[Log] Disk hard pressure; suspend writes.\n";
         }
@@ -65,7 +148,7 @@ bool RollingFileManager::ensureWritable(size_t /*bytes_hint*/) {
         return false;
     }
     
-    if (!guard_.ensureSoft()) {
+    if (!guard_->ensureSoft()) {
         std::cerr << "[Log] Disk space low; unable to ensure writable.\n";
         return false;
     }
@@ -82,21 +165,15 @@ bool RollingFileManager::needRotate() {
     
     try {
         auto sz = std::filesystem::file_size(current_path_);
-        if (sz >= max_bytes_) return true;
+        auto age = std::chrono::duration_cast<std::chrono::minutes>(
+            std::chrono::system_clock::now() - file_created_time_
+        );
+        
+        // 使用策略模式判断是否需要轮转
+        return rotation_policy_->shouldRotate(sz, age, max_bytes_, max_age_);
     } catch (...) {
         return true;
     }
-    
-    std::error_code ec;
-    auto mtime = std::filesystem::last_write_time(current_path_, ec);
-    if (!ec) {
-        auto now_file = std::filesystem::file_time_type::clock::now();
-        if (now_file - mtime >= max_age_) return true;
-    } else {
-        return true;
-    }
-    
-    return false;
 }
 
 void RollingFileManager::rotate() {
@@ -106,8 +183,11 @@ void RollingFileManager::rotate() {
     }
     
     if (compress_) {
-        try { compressFile(current_path_); }
-        catch (...) {}
+        try { 
+            compressFile(current_path_); 
+        } catch (...) {
+            std::cerr << "[RollingFileManager] Compression failed\n";
+        }
     }
     
     enforceReserveN();
@@ -141,7 +221,13 @@ void RollingFileManager::enforceReserveN() {
     }
 }
 
-std::string RollingFileManager::nowStr(const char* fmt)const {
+void RollingFileManager::compressFile(const std::filesystem::path& src) {
+    if (compression_strategy_) {
+        compression_strategy_->compress(src);
+    }
+}
+
+std::string RollingFileManager::nowStr(const char* fmt) const {
     auto t = std::chrono::system_clock::to_time_t(
         std::chrono::system_clock::now());
     std::tm tm = *std::localtime(&t);
@@ -179,36 +265,14 @@ void RollingFileManager::rollToNewFile() {
         if (!exists_txt && !exists_gz) {
             current_path_ = candidate;
             ofs_.open(current_path_, std::ios::out | std::ios::app);
+            file_created_time_ = std::chrono::system_clock::now();
             return;
         }
     }
     
     current_path_ = base_dir_ / makeFilename(999);
     ofs_.open(current_path_, std::ios::out | std::ios::app);
-}
-
-void RollingFileManager::compressFile(const std::filesystem::path& src) {
-    std::ifstream in(src, std::ios::binary);
-    if (!in) return;
-    
-    auto gzPath = src.string() + ".gz";
-    gzFile out = gzopen(gzPath.c_str(), "wb");
-    if (!out) return;
-    
-    char buffer[1 << 16];
-    while (in) {
-        in.read(buffer, sizeof(buffer));
-        auto n = in.gcount();
-        if (n > 0) {
-            gzwrite(out, buffer, static_cast<unsigned int>(n));
-        }
-    }
-    
-    gzclose(out);
-    in.close();
-    
-    std::error_code ec;
-    std::filesystem::remove(src, ec);
+    file_created_time_ = std::chrono::system_clock::now();
 }
 
 std::string RollingFileManager::expectedExtension() const {
