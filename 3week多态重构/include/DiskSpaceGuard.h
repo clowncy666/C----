@@ -70,7 +70,11 @@ public:
     void setReclaimStrategy(std::shared_ptr<IReclaimStrategy> strategy);
     using OnReclaimCallback = std::function<void(const std::filesystem::path&)>;
     void setOnReclaimCallback(OnReclaimCallback callback);
+    
 
+    // ✅ 新增：查询接口
+    uint64_t getAvailableBytes() const;
+    size_t countManagedFiles() const;
 
 private:
     std::filesystem::path dir_;
@@ -78,7 +82,7 @@ private:
     std::string ext_;
     DiskPolicy policy_;
     
-    static bool hasPrefix(const std::string name, const std::string& prefix);
+    static bool hasPrefix(const std::string& name, const std::string& prefix);
     void collectCandidates(std::vector<std::filesystem::path>& gz, 
                           std::vector<std::filesystem::path>& txt) const;
     void reclaimUtilSoft();
