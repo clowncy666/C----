@@ -12,14 +12,15 @@ RollingFileManager::RollingFileManager(
     std::chrono::minutes maxAge,
     size_t reserveN,
     bool compressOld)
-    : base_dir_(getProcessLogDir(baseDir)),  // 关键：自动加上 <proc>/<pid>
+    : base_dir_(ProcessUtils::getProcessLogDir(baseDir)),  // 关键：自动加上 <proc>/<pid>
       pattern_(std::move(pattern)),
       max_bytes_(maxBytes),
       max_age_(maxAge),
       reserve_n_(reserveN),
       compress_(compressOld),
-      guard_(base_dir_, "", expectedExtension(), 
-             {100ULL * 1024 * 1024, 50ULL * 1024 * 1024, 2})
+      guard_(std::make_unique<DiskSpaceGuard>(
+    base_dir_, "", expectedExtension(), 
+    DiskPolicy{100ULL * 1024 * 1024, 50ULL * 1024 * 1024, 2}))
 {
     std::error_code ec;
     std::filesystem::create_directories(base_dir_, ec);
@@ -105,7 +106,7 @@ void RollingFileManager::rotate() {
     }
     
     if (compress_) {
-        try { gzipFile(current_path_); }
+        try { compressFile(current_path_); }
         catch (...) {}
     }
     
@@ -186,7 +187,7 @@ void RollingFileManager::rollToNewFile() {
     ofs_.open(current_path_, std::ios::out | std::ios::app);
 }
 
-void RollingFileManager::gzipFile(const std::filesystem::path& src) {
+void RollingFileManager::compressFile(const std::filesystem::path& src) {
     std::ifstream in(src, std::ios::binary);
     if (!in) return;
     

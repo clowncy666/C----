@@ -151,7 +151,7 @@ void LoggerCore::log(LogLevel level, const std::string& message,
         return;
     }
     
-    LogEntry entry{level, message, file, function, getCurrentTime(), line};
+    std::make_unique<TextLogEntry> entry{level, message, file, function, getCurrentTime(), line};
     
     if (async_mode_) {
         enqueueAsync(std::move(entry));
@@ -177,15 +177,14 @@ void LoggerCore::logBinary(const void* data, size_t size, const std::string& tag
 }
 
 void LoggerCore::recordMessage(const std::string& topic, const std::string& type,
-                              const std::vector<uint8_t>& data) {
-    MessageEntry entry{topic, type, data, 
-        static_cast<uint64_t>(std::chrono::system_clock::to_time_t(
-            std::chrono::system_clock::now()))};
+                              const std::vector<uint8_t>& data){
+    // ✅ 修复：先定义 timestamp，然后创建 entry
+    uint64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
     
     auto entry = std::make_unique<MessageLogEntry>(
         topic, type, data, timestamp
     );
-    
     if (async_mode_) {
         enqueueAsync(std::move(entry));
     } else {

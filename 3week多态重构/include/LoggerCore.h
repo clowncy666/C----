@@ -40,27 +40,27 @@ public:
     void writeTo(const std::map<std::string, std::shared_ptr<ILogSink>>& sinks) override;
     size_t estimateSize() const override { return message.size() + 128; }
 };
-class BinaryEntry : public ILogEntry {
+class BinaryLogEntry : public ILogEntry {
 public:
     std::vector<uint8_t> data;
     std::string tag;
     uint64_t timestamp;
     // 默认构造函数
     
-    BinaryEntry(const std::vector<uint8_t>& data,const std::string& tag, uint64_t timestamp):
+    BinaryLogEntry(const std::vector<uint8_t>& data,const std::string& tag, uint64_t timestamp):
     data(data), tag(tag), timestamp(timestamp) {}
     void writeTo(const std::map<std::string, std::shared_ptr<ILogSink>>& sinks) override;
     size_t estimateSize() const override { return data.size() + tag.size() + 16; }
 };
 
 
-class MessageEntry : public ILogEntry {
+class MessageLogEntry : public ILogEntry {
 public:
     std::string topic;
     std::string type;
     std::vector<uint8_t> data;
     uint64_t timestamp;
-    MessageEntry(const std::string& topic, const std::string& type,
+    MessageLogEntry(const std::string& topic, const std::string& type,
              const std::vector<uint8_t>& data, uint64_t timestamp)
     : topic(topic), type(type), data(data), timestamp(timestamp) {}
 

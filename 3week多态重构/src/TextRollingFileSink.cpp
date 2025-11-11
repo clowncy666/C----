@@ -61,7 +61,7 @@ bool TextRollingFileSink::ensureWritable(size_t bytes_hint) {
 }
 
 void TextRollingFileSink::flush() {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     auto& os = rolling_mgr_->stream();
     if (os.good()) {
         os.flush();
