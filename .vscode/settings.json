@@ -60,6 +60,11 @@
         "thread": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp",
-        "map": "cpp"
+        "map": "cpp",
+        "any": "cpp",
+        "cstring": "cpp",
+        "forward_list": "cpp",
+        "ranges": "cpp",
+        "valarray": "cpp"
     }
 }

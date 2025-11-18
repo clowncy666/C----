@@ -1,0 +1,40 @@
+{
+  "base_dir": "./logs",
+  "log_level": "INFO",
+  "async_mode": true,
+  "async_queue_size": 10000,
+  "modules": [
+    {
+      "name": "text",
+      "pattern": "log_%Y%m%d_%H%M%S_%03d.txt",
+      "max_bytes_mb": 2,
+      "max_age_minutes": 60,
+      "reserve_n": 10,
+      "compress_old": true
+    },
+    {
+      "name": "binary",
+      "pattern": "binary_%Y%m%d_%H%M%S_%03d.bin",
+      "max_bytes_mb": 5,
+      "max_age_minutes": 120,
+      "reserve_n": 5,
+      "compress_old": true
+    },
+    {
+      "name": "bag",
+      "pattern": "messages_%Y%m%d_%H%M%S_%03d.bag",
+      "max_bytes_mb": 10,
+      "max_age_minutes": 180,
+      "reserve_n": 3,
+      "compress_old": false
+    },
+    {
+      "name": "custom_module",
+      "pattern": "custom_%Y%m%d_%H%M%S_%03d.log",
+      "max_bytes_mb": 3,
+      "max_age_minutes": 90,
+      "reserve_n": 6,
+      "compress_old": true
+    }
+  ]
+}

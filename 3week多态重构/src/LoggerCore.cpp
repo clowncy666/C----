@@ -56,28 +56,29 @@ void MessageLogEntry::writeTo(const std::map<std::string, std::shared_ptr<ILogSi
 // ============================================
 class DefaultSinkFactory : public SinkFactory {
 public:
-    std::shared_ptr<ILogSink> createTextSink(
-        const std::filesystem::path& base_dir, const SinkConfig& config) override {
-        return std::make_shared<TextRollingFileSink>(
-            base_dir, config.module_name, config.pattern,
-            config.max_bytes, config.max_age, config.reserve_n, config.compress_old
-        );
-    }
-    
-    std::shared_ptr<ILogSink> createBinarySink(
-        const std::filesystem::path& base_dir, const SinkConfig& config) override {
-        return std::make_shared<BinaryRollingFileSink>(
-            base_dir, config.module_name, config.pattern,
-            config.max_bytes, config.max_age, config.reserve_n, config.compress_old
-        );
-    }
-    
-    std::shared_ptr<ILogSink> createBagSink(
-        const std::filesystem::path& base_dir, const SinkConfig& config) override {
-        return std::make_shared<BagSink>(
-            base_dir, config.module_name, config.pattern,
-            config.max_bytes, config.max_age, config.reserve_n, config.compress_old
-        );
+    std::shared_ptr<ILogSink> createSink(
+        const std::filesystem::path& base_dir, 
+        const ModuleConfig& config,
+        const std::string& sink_type) override
+    {
+        if (sink_type == "text") {
+            return std::make_shared<TextRollingFileSink>(
+                base_dir, config.name, config.pattern,
+                config.max_bytes, config.max_age, config.reserve_n, config.compress_old
+            );
+        } else if (sink_type == "binary") {
+            return std::make_shared<BinaryRollingFileSink>(
+                base_dir, config.name, config.pattern,
+                config.max_bytes, config.max_age, config.reserve_n, config.compress_old
+            );
+        } else if (sink_type == "bag") {
+            return std::make_shared<BagSink>(
+                base_dir, config.name, config.pattern,
+                config.max_bytes, config.max_age, config.reserve_n, config.compress_old
+            );
+        }
+        
+        throw std::runtime_error("Unknown sink type: " + sink_type);
     }
 };
 
@@ -85,8 +86,7 @@ public:
 // LoggerCore 实现
 // ============================================
 LoggerCore::LoggerCore() {
-    front_buffer_.reserve(1024);
-    back_buffer_.reserve(1024);
+    queue_ = std::queue<std::unique_ptr<ILogEntry>>();
 }
 
 LoggerCore::~LoggerCore() {
@@ -98,11 +98,13 @@ LoggerCore::~LoggerCore() {
     }
     
     // 处理残留数据
-    std::lock_guard<std::mutex> lock(buffer_mtx_);
-    for (auto& entry : front_buffer_) {
+    std::lock_guard<std::mutex> lock(queue_mtx_);
+    while (!queue_.empty()) {
+        auto& entry = queue_.front();
         if (entry) {
             entry->writeTo(sinks_);
         }
+        queue_.pop();
     }
 }
 
@@ -111,32 +113,94 @@ LoggerCore& LoggerCore::instance() {
     return inst;
 }
 
-void LoggerCore::initSinks(const std::filesystem::path& base_dir, 
-                           std::unique_ptr<SinkFactory> factory) {
+void LoggerCore::initFromConfig(const std::string& config_path, 
+                                std::unique_ptr<SinkFactory> factory) 
+{
+    try {
+        LoggerConfig config = LoggerConfig::fromFile(config_path);
+        initFromConfig(config, std::move(factory));
+        std::cout << "[Logger] Loaded config from: " << config_path << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[Logger] Failed to load config: " << e.what() 
+                  << "\nUsing default configuration." << std::endl;
+        initSinks("./logs");
+    }
+}
+
+void LoggerCore::initFromConfig(const LoggerConfig& config,
+                                std::unique_ptr<SinkFactory> factory) 
+{
+    std::lock_guard<std::mutex> lock(config_mtx_);
+    
     if (!factory) {
         factory = std::make_unique<DefaultSinkFactory>();
     }
     
-    // 配置可以从外部传入（进一步降低耦合）
-    SinkConfig text_config{
-        "text", "log_%Y%m%d_%H%M%S_%03d.txt",
-        1 * 1024 * 1024, std::chrono::minutes(60), 8, true
-    };
+    // 更新配置
+    current_config_ = config;
+    current_level_.store(config.log_level);
+    max_queue_size_ = config.async_queue_size;
     
-    SinkConfig binary_config{
-        "binary", "binary_%Y%m%d_%H%M%S_%03d.bin",
-        5 * 1024 * 1024, std::chrono::minutes(120), 5, true
-    };
+    // 清空旧 Sink
+    sinks_.clear();
     
-    SinkConfig bag_config{
-        "bag", "messages_%Y%m%d_%H%M%S_%03d.bag",
-        10 * 1024 * 1024, std::chrono::minutes(180), 3, true
-    };
+    // 创建新 Sink
+    for (const auto& mod_config : config.modules) {
+        std::string sink_type = "text"; // 默认类型
+        
+        // 根据模块名推断类型（可改进为配置项）
+        if (mod_config.name == "text") {
+            sink_type = "text";
+        } else if (mod_config.name == "binary") {
+            sink_type = "binary";
+        } else if (mod_config.name == "bag") {
+            sink_type = "bag";
+        }
+        
+        try {
+            auto sink = factory->createSink(config.base_dir, mod_config, sink_type);
+            sinks_[mod_config.name] = sink;
+            std::cout << "[Logger] Created sink: " << mod_config.name << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[Logger] Failed to create sink " << mod_config.name 
+                      << ": " << e.what() << std::endl;
+        }
+    }
     
-    sinks_["text"] = factory->createTextSink(base_dir, text_config);
-    sinks_["binary"] = factory->createBinarySink(base_dir, binary_config);
-    sinks_["bag"] = factory->createBagSink(base_dir, bag_config);
+    // 设置异步模式
+    setAsyncMode(config.async_mode);
 }
+
+
+
+
+
+
+void LoggerCore::initSinks(const std::filesystem::path& base_dir, 
+                           std::unique_ptr<SinkFactory> factory) {
+    
+    
+    // 使用默认配置
+    LoggerConfig default_config;
+    default_config.base_dir = base_dir;
+    default_config.modules = {
+        ModuleConfig{
+            "text", "log_%Y%m%d_%H%M%S_%03d.txt",
+            1 * 1024 * 1024, std::chrono::minutes(60), 8, true
+        },
+        ModuleConfig{
+            "binary", "binary_%Y%m%d_%H%M%S_%03d.bin",
+            5 * 1024 * 1024, std::chrono::minutes(120), 5, true
+        },
+        ModuleConfig{
+            "bag", "messages_%Y%m%d_%H%M%S_%03d.bag",
+            10 * 1024 * 1024, std::chrono::minutes(180), 3, true
+        }
+    };
+    
+    initFromConfig(default_config, std::move(factory));
+}
+
 
 void LoggerCore::setLogLevel(LogLevel level) {
     current_level_ = level;
@@ -146,6 +210,8 @@ void LoggerCore::setAsyncMode(bool enable) {
     if (enable && !async_mode_) {
         async_mode_ = true;
         worker_ = std::thread(&LoggerCore::processAsyncQueue, this);
+        std::cout << "[Logger] Async mode enabled (queue size: " 
+                  << max_queue_size_ << ")" << std::endl;
     } else if (!enable && async_mode_) {
         stop_ = true;
         cv_.notify_all();
@@ -154,8 +220,41 @@ void LoggerCore::setAsyncMode(bool enable) {
         }
         stop_ = false;
         async_mode_ = false;
+        std::cout << "[Logger] Async mode disabled" << std::endl;
     }
 }
+
+
+void LoggerCore::reloadConfig(const std::string& config_path) {
+    try {
+        LoggerConfig new_config = LoggerConfig::fromFile(config_path);
+        
+        // 先停止异步模式
+        bool was_async = async_mode_;
+        if (was_async) {
+            setAsyncMode(false);
+        }
+        
+        // 重新初始化
+        initFromConfig(new_config);
+        
+        // 恢复异步模式
+        if (was_async) {
+            setAsyncMode(true);
+        }
+        
+        std::cout << "[Logger] Configuration reloaded from: " << config_path << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[Logger] Failed to reload config: " << e.what() << std::endl;
+    }
+}
+
+LoggerConfig LoggerCore::getCurrentConfig() const {
+    std::lock_guard<std::mutex> lock(config_mtx_);
+    return current_config_;
+}
+
+
 
 void LoggerCore::log(LogLevel level, const std::string& message,
                      const std::string& file, const std::string& function, int line) {
@@ -163,7 +262,7 @@ void LoggerCore::log(LogLevel level, const std::string& message,
         return;
     }
     
-    // ✅ 修复：正确的语法
+
     auto entry = std::make_unique<TextLogEntry>(
         level, message, file, function, getCurrentTime(), line
     );
@@ -221,42 +320,56 @@ void LoggerCore::enqueueAsync(std::unique_ptr<ILogEntry> entry) {
     if (!entry) return;
     
     {
-        std::lock_guard<std::mutex> lock(buffer_mtx_);
-        front_buffer_.push_back(std::move(entry));
+        std::lock_guard<std::mutex> lock(queue_mtx_);
+        if (queue_.size() >= max_queue_size_) {
+            queue_.pop();
+            static size_t drop_count = 0;
+            if (++drop_count % 1000 == 0) {
+                std::cerr << "[Logger] Queue overflow, dropped " 
+                          << drop_count << " entries" << std::endl;
+            }
+        }
+        
+        queue_.push(std::move(entry));
     }
     cv_.notify_one();
 }
 
 void LoggerCore::processAsyncQueue() {
+    std::vector<std::unique_ptr<ILogEntry>> batch;
+    batch.reserve(100); 
     while (!stop_) {
         // 等待数据或停止信号
         {
-            std::unique_lock<std::mutex> lock(buffer_mtx_);
+            std::unique_lock<std::mutex> lock(queue_mtx_);
             cv_.wait_for(lock, std::chrono::milliseconds(100), [this] {
-                return !front_buffer_.empty() || stop_;
+                return !queue_.empty() || stop_;
             });
             
-            // 交换缓冲区（关键：正确的双缓冲实现）
-            front_buffer_.swap(back_buffer_);
+            while (!queue_.empty() && batch.size() < 100) {
+                batch.push_back(std::move(queue_.front()));
+                queue_.pop();
+            }
         }
         
         // 在锁外处理数据（提高并发性能）
-        for (auto& entry : back_buffer_) {
+        for (auto& entry : batch) {
             if (entry) {
                 entry->writeTo(sinks_);
             }
         }
-        back_buffer_.clear();
+        batch.clear();
     }
     
     // 处理残留数据
-    std::lock_guard<std::mutex> lock(buffer_mtx_);
-    for (auto& entry : front_buffer_) {
+    std::lock_guard<std::mutex> lock(queue_mtx_);
+    while (!queue_.empty()) {
+        auto& entry = queue_.front();
         if (entry) {
             entry->writeTo(sinks_);
         }
+        queue_.pop();
     }
-    front_buffer_.clear();
 }
 
 std::string LoggerCore::getCurrentTime() {

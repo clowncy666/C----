@@ -10,9 +10,10 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include "LoggerConfig.h"
 class LoggerCore;
 
-enum class LogLevel { DEBUG, INFO, WARNING, ERROR, CRITICAL };
+
 
 class ILogEntry {
 public:
@@ -79,12 +80,10 @@ struct SinkConfig {
 class SinkFactory {
 public:
     virtual ~SinkFactory() = default;
-    virtual std::shared_ptr<ILogSink> createTextSink(
-        const std::filesystem::path& base_dir, const SinkConfig& config) = 0;
-    virtual std::shared_ptr<ILogSink> createBinarySink(
-        const std::filesystem::path& base_dir, const SinkConfig& config) = 0;
-    virtual std::shared_ptr<ILogSink> createBagSink(
-        const std::filesystem::path& base_dir, const SinkConfig& config) = 0;
+    virtual std::shared_ptr<ILogSink> createSink(
+        const std::filesystem::path& base_dir, 
+        const ModuleConfig& config,
+        const std::string& sink_type) = 0;
 };
 
 
@@ -94,14 +93,23 @@ public:
 
     static LoggerCore& instance();
     
-    // 初始化各模块 Sink
-    void initSinks(const std::filesystem::path& base_dir,std::unique_ptr<SinkFactory> factory = nullptr);
+    // 从配置文件初始化
+    void initFromConfig(const std::string& config_path, 
+                       std::unique_ptr<SinkFactory> factory = nullptr);
     
-    // 设置日志级别
+    // 从配置对象初始化
+    void initFromConfig(const LoggerConfig& config,
+                       std::unique_ptr<SinkFactory> factory = nullptr);
+    
+    // 传统初始化（向后兼容）
+    void initSinks(const std::filesystem::path& base_dir,
+                  std::unique_ptr<SinkFactory> factory = nullptr);
+    
+    // 运行时调整
     void setLogLevel(LogLevel level);
-    
-    // 切换同步/异步模式
     void setAsyncMode(bool enable);
+    void reloadConfig(const std::string& config_path);
+    
     
     // 写文本日志
     void log(LogLevel level, const std::string& message,
@@ -115,6 +123,8 @@ public:
                       const std::vector<uint8_t>& data);
     
     ~LoggerCore();
+    //查询当前配置
+    LoggerConfig getCurrentConfig() const;
     
 private:
     LoggerCore();
@@ -130,13 +140,12 @@ private:
     void processAsyncQueue();
     
     // 辅助函数
-    std::string formatTextEntry(const TextLogEntry& entry);
     std::string getCurrentTime();
-    std::string logLevelToString(LogLevel level);
     
     // 成员变量
     std::map<std::string, std::shared_ptr<ILogSink>> sinks_;
-    LogLevel current_level_ = LogLevel::INFO;
+    LoggerConfig current_config_;
+    std::atomic<LogLevel> current_level_{LogLevel::INFO};
     
     // 异步模式
     std::atomic<bool> async_mode_{false};
@@ -148,13 +157,14 @@ private:
 
 
     // 双缓冲（正确实现）
-    std::vector<std::unique_ptr<ILogEntry>> front_buffer_;
-    std::vector<std::unique_ptr<ILogEntry>> back_buffer_;
-    std::mutex buffer_mtx_;
+    std::queue<std::unique_ptr<ILogEntry>> queue_;
+    size_t max_queue_size_ = 10000;
+    std::mutex queue_mtx_;
     std::condition_variable cv_;
     
     // 同步写入锁（与异步分离）
     std::mutex sync_write_mtx_;
+    mutable std::mutex config_mtx_;
 
 };
 
