@@ -1,7 +1,9 @@
 #include "LoggerCore.h"
 
 #include "../manager/RollingFileManager.h"
-#include "../sink/BagSink.h"
+#include "../sinks/TextRollingFileSink.h"    
+#include "../sinks/BinaryRollingFileSink.h"   
+#include "../sinks/BagSink.h" 
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -258,7 +260,7 @@ LoggerConfig LoggerCore::getCurrentConfig() const {
 
 void LoggerCore::log(LogLevel level, const std::string& message,
                      const std::string& file, const std::string& function, int line) {
-    if (static_cast<int>(level) < static_cast<int>(current_level_)) {
+    if (static_cast<int>(level) < static_cast<int>(current_level_.load())) {
         return;
     }
     

@@ -10,8 +10,8 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
-#include "../include/LoggerConfig.h"
-
+#include "../../include/logger/LoggerConfig.h"
+#include <queue>
 class LoggerCore;
 
 
@@ -142,7 +142,7 @@ private:
     
     // 辅助函数
     std::string getCurrentTime();
-    
+    std::string logLevelToString(LogLevel level);
     // 成员变量
     std::map<std::string, std::shared_ptr<ILogSink>> sinks_;
     LoggerConfig current_config_;

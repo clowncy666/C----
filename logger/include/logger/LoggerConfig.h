@@ -1,11 +1,18 @@
+#pragma once
+#include <nlohmann/json.hpp>  
+#include <filesystem>
+#include <chrono>
+#include <vector>
+#include <string>
 #include <fstream>
 #include <stdexcept>
 using json = nlohmann::json; 
 enum class LogLevel {
     DEBUG,
     INFO,
-    WARN,
-    ERROR
+    WARNING,
+    ERROR,
+    CRITICAL
 };
 //单个模块配置
 struct ModuleConfig {

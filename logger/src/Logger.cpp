@@ -1,7 +1,8 @@
-#include "Logger.h"
-#include "../core/LoggerCore.h"
+#include "../../logger/include/logger/LoggerConfig.h"
+#include "../../logger/src/core/LoggerCore.h"
 #include <filesystem>
 #include <iostream>
+#include "../../logger/include/logger/Logger.h" 
 
 namespace logger {
 
