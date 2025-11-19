@@ -1,10 +1,10 @@
 #pragma once
-#include "ILogSink.h"
-#include "RollingFileManager.h"
+
+#include "../manager/RollingFileManager.h"
 #include <memory>
 #include <mutex>
 #include <filesystem>
-
+#include "../core/ILogSink.h"
 class BagSink : public ILogSink {
 public:
     BagSink(const std::filesystem::path& base_dir,

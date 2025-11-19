@@ -1,7 +1,7 @@
 #include "LoggerCore.h"
-#include "TextRollingFileSink.h"
-#include "BinaryRollingFileSink.h"
-#include "BagSink.h"
+
+#include "../manager/RollingFileManager.h"
+#include "../sink/BagSink.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>

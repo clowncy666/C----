@@ -1,6 +1,6 @@
 #pragma once
-#include "ILogSink.h"
-#include "RollingFileManager.h"
+#include "../core/ILogSink.h"
+#include "../manager/RollingFileManager.h"
 #include <memory>
 #include <mutex>
 #include <filesystem>

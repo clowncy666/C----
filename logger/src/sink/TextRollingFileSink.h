@@ -1,5 +1,5 @@
 #pragma once
-#include "ILogSink.h"
+#include "../core/ILogSink.h"
 #include "RollingFileManager.h"
 #include <memory>
 #include <mutex>

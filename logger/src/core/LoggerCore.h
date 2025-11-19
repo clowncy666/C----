@@ -10,7 +10,8 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
-#include "LoggerConfig.h"
+#include "../include/LoggerConfig.h"
+
 class LoggerCore;
 
 
